@@ -1,79 +1,66 @@
-// MEATSHIFT — 2D платформер. Гравитация, прыжки, даш, волны по убийствам. Апгрейды сбрасываются при смерти.
+// MEATSHIFT — 2D платформер, волны врагов, апгрейды (сбрасываются при смерти).
 
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
-
 const W = canvas.width;
 const H = canvas.height;
 
-// —— Физика «тяжести» (пиксели/тик, 60 тиков/сек) ——
-const GRAVITY = 1.0; // 0.8–1.2
-const TERMINAL_VELOCITY = 14; // 12–15
-const JUMP_VEL = -28.28; // высота прыжка ×2 (200%) — игрок легко достаёт до первой платформы
+const GRAVITY = 1.0;
+const TERMINAL_VELOCITY = 14;
+const JUMP_VEL = -28.28;
 const DOUBLE_JUMP_VEL = -20;
 const RUN_ACCEL = 1.1;
 const RUN_MAX = 5.5;
 const GROUND_FRICTION = 0.78;
 const AIR_FRICTION = 0.96;
-// Dash: +200% длины (в 3 раза длиннее шага), cooldown 6 сек
 const DASH_SPEED = 14;
-const DASH_FRAMES = 12; // итого ~168 px за рывок
-const DASH_COOLDOWN = 300; // 5 сек (60*5), только по кулдауну
-const DASH_EXIT_SPEED = 3; // инерция после даша — замедление до полной остановки
+const DASH_FRAMES = 12;
+const DASH_COOLDOWN = 300;
+const DASH_EXIT_SPEED = 3;
 const WALL_SLIDE_SPEED = 1.2;
 const WALL_JUMP_VX = 7;
 const WALL_JUMP_VY = -12;
-// Ground Pound (S в воздухе): радиус +150%, AoE ударная волна, частицы/тряска синхронны с радиусом
-const GROUND_POUND_GRAVITY_MUL = 3; // ускорение падения ×3
-const GROUND_POUND_RADIUS = 150; // было 60, увеличен на 150% (60 + 90)
+const GROUND_POUND_GRAVITY_MUL = 3;
+const GROUND_POUND_RADIUS = 150;
 const GROUND_POUND_DAMAGE = 25;
 const GROUND_POUND_LANDING_FRAMES = 18;
-const GROUND_POUND_COOLDOWN = 180; // 3 секунды (отдельная способность, не часть атаки)
+const GROUND_POUND_COOLDOWN = 180;
 
 const PLAYER_W = 32;
 const PLAYER_H = 48;
 const PLATFORM_H = 40;
-const PLATFORM_MIN_W = 100; // достаточно широкие для безопасного приземления
+const PLATFORM_MIN_W = 100;
 const PLATFORM_MAX_W = 220;
-// Один ряд платформ; высота от пола до низа первой платформы = 80% от высоты прыжка
-const JUMP_HEIGHT_PX = (JUMP_VEL * JUMP_VEL) / (2 * GRAVITY); // ≈400 при JUMP_VEL=-28.28
-const FLOOR_TO_FIRST_PLATFORM = Math.round(0.35 * JUMP_HEIGHT_PX); // платформы ниже (35% высоты прыжка)
-const NUM_ROWS = 1; // ТЗ: количество рядов = 1
-const CHUNK_WIDTH = 420;
-const ARENA_WIDTH = 1100; // пол уже — узкая коробка
+const JUMP_HEIGHT_PX = (JUMP_VEL * JUMP_VEL) / (2 * GRAVITY);
+const FLOOR_TO_FIRST_PLATFORM = Math.round(0.35 * JUMP_HEIGHT_PX);
+const ARENA_WIDTH = 1100;
 const ARENA_HEIGHT = Math.max(H * 2.5, 1600);
-const SPAWN_PLATFORM_LIMIT = 10;
-const WAVES_BEFORE_EMPTY = 14; // после N волн — пустые платформы (пауза спавна)
-const TRAINING_PLATFORMS = 6;
-const WAVE_PAUSE_MIN = 80;
-const WAVE_PAUSE_EXTRA = 70;
-const PARTICLE_LIFETIME = 90; // 1–2 сек, не перегружать
+const PARTICLE_LIFETIME = 90;
 const MAX_PARTICLES = 220;
-const LANDING_DUST_VEL = 8; // порог падения для пыли
+const LANDING_DUST_VEL = 8;
 const BLOOD_POOL_DECAY = 0.012;
-const MAX_ENEMIES = 80; // лимит одновременных врагов (волны масштабируются)
-const MELEE_KNOCKBACK = 7; // фиксированное отталкивание врага от игрока при ударе
+const MAX_ENEMIES = 80;
+const MELEE_KNOCKBACK = 7;
 const MELEE_PARTICLE_COUNT_MIN = 14;
 const MELEE_PARTICLE_COUNT_MAX = 24;
-const MELEE_PARTICLE_LIFE = 18; // быстро исчезают
-const BONUS_APPEAR_DELAY = 60; // 1.0 сек после последнего врага до экрана бонусов
-const WAVE_ANNOUNCE_FRAMES = 75; // ~1.25 сек показ "ВОЛНА N"
+const MELEE_PARTICLE_LIFE = 18;
+const BONUS_APPEAR_DELAY = 60;
+const WAVE_ANNOUNCE_FRAMES = 75;
 const WAVE_1_ENEMY_COUNT = 10;
-const WAVE_SCALE_PER_WAVE = 1.1; // +10% за волну
+const WAVE_SCALE_PER_WAVE = 1.1;
 
-// —— Фидбэк при уроне ——
-const CAMERA_SHAKE_STRENGTH = 3; // 2–4 px
-const CAMERA_SHAKE_DURATION = 9; // ~0.15 сек
-const HIT_PAUSE_FRAMES = 5; // hit-stop 0.05–0.1 сек при попадании
-const ENEMY_STUN_FRAMES = 5; // 0.05–0.1 сек
-const HURT_FLASH_FRAMES = 6; // красный flash
-const HIT_PARTICLE_LIFE = 22; // мелкие частицы при ударе по врагу
+const CAMERA_SHAKE_STRENGTH = 3;
+const CAMERA_SHAKE_DURATION = 9;
+const HIT_PAUSE_FRAMES = 5;
+const ENEMY_STUN_FRAMES = 5;
+const HURT_FLASH_FRAMES = 6;
+const HIT_PARTICLE_LIFE = 22;
 
 let cameraX = 0;
 let cameraTargetX = 0;
 let cameraY = 0;
 let cameraTargetY = 0;
-const CAMERA_LAG = 0.06; // задержка камеры за игроком (инерция)
+const CAMERA_LAG = 0.06;
 let platformShakeFrames = 0;
 let worldRight = 0;
 let gameTime = 0;
@@ -92,15 +79,15 @@ let platforms = [];
 let bloodPools = [];
 let particles = [];
 let enemies = [];
-let goreRemains = [];
 let corpses = [];
 let dashTrail = [];
-let meleeTrail = []; // след оружия при атаке (визуал), макс 8 точек
-let waveEnemiesTarget = WAVE_1_ENEMY_COUNT; // сколько врагов в текущей волне
+let meleeTrail = [];
+let attackTrail = [];
+let waveEnemiesTarget = WAVE_1_ENEMY_COUNT;
 let waveEnemiesSpawned = 0;
 let waveAnnounceFrames = WAVE_ANNOUNCE_FRAMES;
 let wavePauseFrames = 0;
-let waveBonusDelayFrames = -1; // 1 сек задержка перед бонусами после завершения волны (-1 = не активна)
+let waveBonusDelayFrames = -1;
 
 const player = {
   x: 200,
@@ -125,7 +112,7 @@ const player = {
   wallSlideLeft: false,
   wallSlideRight: false,
   upgrades: { speed: 0, damage: 0, regen: 0, maxHp: 0 },
-  cooldownReductions: 0, // снижение КД способностей, макс 2 за игру
+  cooldownReductions: 0,
   hurtFlashFrames: 0,
   previousVy: 0,
   meleeVariant: 0,
@@ -133,12 +120,11 @@ const player = {
   meleeAlternate: 0,
   comboFrames: 999,
   comboStacks: 0,
-  attackDirX: 1,
-  attackDirY: 0,
-  attackAngle: 0,
+  attackFacing: 1,
   groundPound: false,
   groundPoundLandingFrames: 0,
-  groundPoundCooldown: 0, // КД 3 сек, отдельно от атаки
+  groundPoundCooldown: 0,
+  regenAccumulatorMs: 0,
 };
 
 function runSpeed() {
@@ -157,9 +143,6 @@ function getGroundPoundCooldown() {
   );
 }
 
-let dashUsesLeft = 1;
-
-// —— Звуки (Web Audio API, процедурные) ——
 let audioCtx = null;
 function ensureAudio() {
   if (!audioCtx) {
@@ -230,7 +213,6 @@ function playPickUpgradeSound() {
   playTone(520, 0.05, "sine", 0.06, 660);
 }
 
-// —— Триггер при уроне игроку: пауза + тряска + flash + звук ——
 function onPlayerHit() {
   hitPauseFrames = HIT_PAUSE_FRAMES;
   cameraShakeFrames = CAMERA_SHAKE_DURATION;
@@ -256,21 +238,11 @@ function getCameraShakeOffset() {
   return { x, y };
 }
 
-// —— Арена-коробка: ПОЛ (сплошной внизу), СТЕНЫ, ПОТОЛОК, платформы ВНУТРИ, порталы в стенах ——
 const FLOOR_HEIGHT = 48;
 const FLOOR_Y = ARENA_HEIGHT - FLOOR_HEIGHT;
 const PORTAL_W = 32;
 const PORTAL_H = 56;
 
-function getPlatformAt(x) {
-  return platforms.find((p) => x >= p.x && x < p.x + p.w);
-}
-
-function isFloor(p) {
-  return p.y >= FLOOR_Y - 2 && p.y <= FLOOR_Y + 2 && p.w >= ARENA_WIDTH - 10;
-}
-
-// Уровень пола/платформы в точке x (верх поверхности, на которую падают частицы)
 function getGroundY(x) {
   if (!platforms || !platforms.length)
     return typeof FLOOR_Y === "number" ? FLOOR_Y : 0;
@@ -282,13 +254,12 @@ function getGroundY(x) {
 
 const PORTAL_POSITIONS = [];
 
-// Один ряд платформ: 2–3 штуки, равномерно по X; высота = 80% прыжка от пола; между ними зазор для прыжка
 function ensurePlatformsUpTo(x) {
   if (worldRight >= ARENA_WIDTH) return;
-  const rowY = FLOOR_Y - FLOOR_TO_FIRST_PLATFORM - PLATFORM_H; // низ платформы на 80% прыжка выше пола
-  const numPlats = 2 + Math.floor(Math.random() * 2); // 2 или 3
+  const rowY = FLOOR_Y - FLOOR_TO_FIRST_PLATFORM - PLATFORM_H;
+  const numPlats = 2 + Math.floor(Math.random() * 2);
   const segmentWidth = ARENA_WIDTH / (numPlats + 1);
-  const minGap = 80; // зазор между платформами — игрок переходит прыжком
+  const minGap = 80;
   const maxPlatW = Math.max(PLATFORM_MIN_W, segmentWidth - minGap);
   const platW = Math.min(PLATFORM_MAX_W, maxPlatW);
   for (let i = 0; i < numPlats; i++) {
@@ -321,7 +292,6 @@ function initFirstPlatforms() {
     isFloor: true,
   });
   ensurePlatformsUpTo(ARENA_WIDTH);
-  // Порталы: уровень пола и уровень единственного ряда платформ
   PORTAL_POSITIONS.length = 0;
   PORTAL_POSITIONS.push(
     { x: 12, y: FLOOR_Y - 40, side: "left" },
@@ -340,7 +310,6 @@ function initFirstPlatforms() {
   player.vy = 0;
 }
 
-// —— Коллизия AABB с платформой (проникновение по минимальной оси) ——
 function resolvePlatform(obj, ow, oh) {
   let grounded = false;
   for (const p of platforms) {
@@ -359,7 +328,7 @@ function resolvePlatform(obj, ow, oh) {
     } else {
       obj.y += penT < penB ? -penT : penB;
       obj.vy = 0;
-      if (penT <= penB) grounded = true; // стоим сверху
+      if (penT <= penB) grounded = true;
     }
   }
   return grounded;
@@ -373,21 +342,6 @@ function platformCollide(x, y, w, h) {
   return false;
 }
 
-function getGroundY(x, w) {
-  let best = H + 100;
-  for (const p of platforms) {
-    if (
-      x + w > p.x &&
-      x < p.x + p.w &&
-      p.y < best &&
-      p.y >= player.y + player.h - 1
-    )
-      best = p.y;
-  }
-  return best;
-}
-
-// —— Input ——
 window.addEventListener("keydown", (e) => {
   keys[e.code] = true;
   if (e.code === "KeyW" || e.code === "Space") e.preventDefault();
@@ -397,7 +351,6 @@ window.addEventListener("keyup", (e) => {
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-// —— Прыжок, даш, атака ——
 function tryJump() {
   if (player.dashFrames > 0) return;
   if (player.grounded) {
@@ -427,7 +380,6 @@ function tryWallJump() {
   }
 }
 function tryDash() {
-  // ТЗ: даш только по кулдауну 5 сек; при КД — ничего не происходит
   if (player.dashCooldown > 0 || player.dashFrames > 0) return;
   player.dashFrames = DASH_FRAMES;
   player.dashDir = player.facing;
@@ -435,30 +387,23 @@ function tryDash() {
   playDashSound();
   spawnDashParticles(player.x + player.w / 2, player.y + player.h / 2);
 }
-const MELEE_TOP_DOWN = 0; // взмах сверху вниз
-const MELEE_BOTTOM_UP = 1; // взмах снизу вверх
-// ТЗ: анимация удара мечом — 15 кадров (~0.25 сек), удар в середине, КД 25 кадров
+const MELEE_TOP_DOWN = 0;
+const MELEE_BOTTOM_UP = 1;
 const MELEE_ANIM_FRAMES = 15;
-const MELEE_HIT_AT_FRAME = 7; // середина анимации (кадр 7 из 15)
-const MELEE_COOLDOWN_FRAMES = 25;
-// Масштаб: длина меча 1.5–2× на замахе, толщина 1.2–1.5×, макс длина ≈2.5–3 ширины игрока (32px)
+const MELEE_HIT_AT_FRAME = 7;
+const MELEE_ANIM_SPEED = 2;
+const MELEE_COOLDOWN_FRAMES = Math.max(1, Math.floor(25 / MELEE_ANIM_SPEED));
 const MELEE_LENGTH_SCALE = 1.8;
 const MELEE_THICKNESS_SCALE = 1.35;
 const MELEE_MAX_LENGTH = Math.min(130, PLAYER_W * 3.5);
-// Комбо: следующая атака в течение 0.5 сек → +40% радиуса хитбокса, макс 3 стака (+120%). Не влияет на урон и анимацию.
-const COMBO_WINDOW_FRAMES = 30; // 0.5 сек при 60 FPS
-const COMBO_RADIUS_PER_STACK = 0.4; // +40% за стак
+const COMBO_WINDOW_FRAMES = 60;
+const COMBO_RADIUS_PER_STACK = 0.4;
 const COMBO_MAX_STACKS = 3;
-const MELEE_HIT_MARGIN = 28; // ширина зоны попадания вдоль сегмента атаки
+const MELEE_HIT_MARGIN = 28;
 
 function tryMelee() {
   if (player.meleeCooldown > 0 || player.meleeFrames > 0) return;
-
-  // Направление атаки = направление движения (facing)
-  const dir = player.facing;
-  player.attackDirX = dir;
-  player.attackDirY = 0;
-  player.attackAngle = dir > 0 ? 0 : Math.PI;
+  player.attackFacing = player.facing;
 
   if (player.comboFrames > COMBO_WINDOW_FRAMES) player.comboStacks = 0;
   else
@@ -477,14 +422,12 @@ function tryMelee() {
   playMeleeSwingSound();
 }
 
-// —— Лимит частиц (производительность) ——
 function addParticle(p) {
   if (!particles || !Array.isArray(particles)) particles = [];
   if (particles.length >= MAX_PARTICLES) particles.shift();
   particles.push(p);
 }
 
-// —— Ground Pound: частицы и разброс синхронизированы с радиусом AoE ——
 function spawnGroundPoundEffect(x, y) {
   const scale = GROUND_POUND_RADIUS / 60; // относительный масштаб (база 60)
   const n = Math.floor(28 * scale) + Math.floor(Math.random() * 16 * scale);
@@ -582,7 +525,6 @@ function spawnDashParticles(x, y) {
   }
 }
 
-// —— Частицы и горе (25–35 за удар/смерть, тянутся вниз гравитацией) ——
 function spawnGore(x, y, size) {
   const n = 25 + Math.floor(Math.random() * 11);
   for (let i = 0; i < n; i++) {
@@ -619,7 +561,6 @@ function killEnemy(e) {
   // Апгрейды только в конце волны (см. проверку wave cleared в loop)
 }
 
-// Партиклы вылетают в направлении атаки (attackAngle)
 function spawnMeleeHitParticles(variant, x, y, attackAngle) {
   const n =
     MELEE_PARTICLE_COUNT_MIN +
@@ -728,11 +669,14 @@ function damageEnemy(e, dmg, knockbackDir) {
     playKillSound();
   } else {
     playMeleeHitSound();
-    if (knockbackDir) {
-      e.vx += knockbackDir.x * MELEE_KNOCKBACK;
-      e.vy += knockbackDir.y * MELEE_KNOCKBACK;
-    } else {
-      e.vx += e.x < player.x ? -MELEE_KNOCKBACK : MELEE_KNOCKBACK;
+    const typ = ENEMY_TYPES[e.type];
+    if (typ && typ.canBeKnockedBack !== false) {
+      if (knockbackDir) {
+        e.vx += knockbackDir.x * MELEE_KNOCKBACK;
+        e.vy += knockbackDir.y * MELEE_KNOCKBACK;
+      } else {
+        e.vx += e.x < player.x ? -MELEE_KNOCKBACK : MELEE_KNOCKBACK;
+      }
     }
     e.stunFrames = ENEMY_STUN_FRAMES;
     spawnHitParticles(e.x + e.w / 2, e.y + e.h / 2);
@@ -741,16 +685,16 @@ function damageEnemy(e, dmg, knockbackDir) {
   }
 }
 
-// ТЗ: базовое здоровье врагов увеличено в 1.5 раза (от него масштабируются волны)
 const ENEMY_TYPES = {
   runner: {
     hp: 15,
     w: 28,
     h: 32,
-    speed: 2.8, // база ×0.7 (ТЗ: враги на 30% медленнее)
+    speed: 2.8,
     color: "#a03030",
     big: false,
     baseDmg: 8,
+    canBeKnockedBack: true,
   },
   jumper: {
     hp: 21,
@@ -761,16 +705,18 @@ const ENEMY_TYPES = {
     big: false,
     jumpVel: -10,
     baseDmg: 8,
+    canBeKnockedBack: true,
   },
   flyer: {
     hp: 12,
     w: 24,
     h: 24,
-    speed: 0.84,
+    speed: 1.6,
     color: "#604060",
     big: false,
     fly: true,
     baseDmg: 4,
+    canBeKnockedBack: true,
   },
   big: {
     hp: 53,
@@ -780,6 +726,7 @@ const ENEMY_TYPES = {
     color: "#503030",
     big: true,
     baseDmg: 14,
+    canBeKnockedBack: false,
   },
 };
 
@@ -881,19 +828,30 @@ function updateEnemy(e, dt) {
   const typ = ENEMY_TYPES[e.type];
   if (!typ) return;
 
-  // Цель врага = позиция игрока (всегда идём к игроку, не стоим, не патрулируем)
   e.goalX = player.x;
   e.goalY = player.y;
 
   const wasGrounded = e.grounded;
 
   if (typ.fly) {
-    e.dir = player.x > e.x ? 1 : -1;
-    e.vy = 0;
-    e.y += Math.sin(gameTime * 0.08) * 0.5;
-    const targetVx = e.dir * e.speed;
-    e.vx += (targetVx - e.vx) * 0.12;
+    const exCenter = e.x + e.w / 2;
+    const eyCenter = e.y + e.h / 2;
+    const pxCenter = player.x + player.w / 2;
+    const pyCenter = player.y + player.h / 2;
+    let dx = pxCenter - exCenter;
+    let dy = pyCenter - eyCenter;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+    e.dir = dx > 0 ? 1 : -1;
+    const targetVx = dx * e.speed;
+    const targetVy = dy * e.speed;
+    const flyLerp = 0.32;
+    e.vx += (targetVx - e.vx) * flyLerp;
+    e.vy += (targetVy - e.vy) * flyLerp;
     e.x += e.vx;
+    e.y += e.vy;
+    resolvePlatform(e, e.w, e.h);
     e.x = Math.max(0, Math.min(ARENA_WIDTH - e.w, e.x));
     e.y = Math.max(24, Math.min(ARENA_HEIGHT - e.h - 24, e.y));
   } else {
@@ -1013,7 +971,7 @@ const UPGRADE_LIST = [
   { id: "damage", label: "+10% урона атаки" },
   { id: "speed", label: "+10% скорости" },
   { id: "cooldown", label: "−1 сек КД способностей", maxPicks: 2 },
-  { id: "regen", label: "+10% maxHP/сек регенерации" },
+  { id: "regen", label: "+0.2% maxHP/сек регенерации", maxPicks: 5 },
   { id: "maxHp", label: "+10% макс. здоровья" },
 ];
 
@@ -1047,11 +1005,13 @@ function applyUpgrade(id) {
 function openUpgradeScreen() {
   const container = document.getElementById("upgradeButtons");
   container.innerHTML = "";
-  let pool = UPGRADE_LIST.filter(
-    (u) =>
-      u.id !== "cooldown" ||
-      (player.cooldownReductions || 0) < (u.maxPicks || 999)
-  );
+  let pool = UPGRADE_LIST.filter((u) => {
+    if (u.id === "cooldown")
+      return (player.cooldownReductions || 0) < (u.maxPicks || 999);
+    if (u.id === "regen")
+      return (player.upgrades.regen || 0) < (u.maxPicks || 999);
+    return true;
+  });
   pool = [...pool].sort(() => Math.random() - 0.5).slice(0, 3);
   pool.forEach((u) => {
     const btn = document.createElement("button");
@@ -1063,7 +1023,6 @@ function openUpgradeScreen() {
   playUpgradeSound();
 }
 
-// —— Кровь под ногами (скольжение) ——
 function getBloodAt(x, y) {
   let sum = 0;
   bloodPools.forEach((p) => {
@@ -1073,7 +1032,6 @@ function getBloodAt(x, y) {
   return Math.min(1, sum);
 }
 
-// —— Game loop ——
 let lastTime = performance.now();
 function loop(now) {
   const dt = Math.min(2, (now - lastTime) / 16.67);
@@ -1133,7 +1091,7 @@ function loop(now) {
       player.groundPound = true;
     if (player.grounded) player.groundPound = false;
     if (keys.ShiftLeft) tryDash();
-    if (keys.Space) tryMelee(); // ТЗ: обычная атака только на ПРОБЕЛ
+    if (keys.Space) tryMelee();
 
     const accel = (left && !right ? -1 : right && !left ? 1 : 0) * RUN_ACCEL;
     const maxSp = runSpeed();
@@ -1223,9 +1181,18 @@ function loop(now) {
   }
 
   if (player.meleeFrames > 0) {
-    player.meleeFrames--;
-    if (player.meleeFrames === 0) meleeTrail = [];
-    if (player.meleeFrames === MELEE_HIT_AT_FRAME) {
+    player.meleeFrames = Math.max(0, player.meleeFrames - MELEE_ANIM_SPEED);
+    if (player.meleeFrames === 0) {
+      if (meleeTrail.length > 0) {
+        attackTrail = meleeTrail.map((p) => ({ x: p.x, y: p.y, alpha: 0.85 }));
+        meleeTrail = [];
+      }
+    }
+    const hitFrameCrossed =
+      player.meleeFrames <= MELEE_HIT_AT_FRAME &&
+      player.meleeFrames + MELEE_ANIM_SPEED > MELEE_HIT_AT_FRAME;
+    if (hitFrameCrossed) {
+      const facing = player.attackFacing ?? player.facing;
       const comboMult = 1 + (player.comboStacks || 0) * COMBO_RADIUS_PER_STACK;
       const hitLen = Math.min(
         MELEE_MAX_LENGTH,
@@ -1233,8 +1200,13 @@ function loop(now) {
       );
       const cx = player.x + player.w / 2;
       const cy = player.y + player.h / 2;
-      const ax = player.attackDirX;
-      const ay = player.attackDirY;
+      const progressHit = 1 - MELEE_HIT_AT_FRAME / MELEE_ANIM_FRAMES;
+      const angleHit =
+        player.meleeVariant === MELEE_TOP_DOWN
+          ? -Math.PI / 2 + progressHit * Math.PI
+          : Math.PI / 2 - progressHit * Math.PI;
+      const ax = facing * Math.cos(angleHit);
+      const ay = Math.sin(angleHit);
       const tipX = cx + ax * hitLen;
       const tipY = cy + ay * hitLen;
       const hitCx = (cx + tipX) / 2;
@@ -1257,7 +1229,7 @@ function loop(now) {
           player.meleeVariant,
           hitCx,
           hitCy,
-          player.attackAngle
+          Math.atan2(ay, ax)
         );
         hitPauseFrames = HIT_PAUSE_FRAMES;
         cameraShakeBiasX = ax * 3;
@@ -1280,20 +1252,29 @@ function loop(now) {
       }
     }
   }
-  if (player.meleeCooldown > 0) player.meleeCooldown--;
+  if (player.meleeCooldown > 0)
+    player.meleeCooldown = Math.max(0, player.meleeCooldown - MELEE_ANIM_SPEED);
   if (player.meleeFrames <= 0) player.comboFrames++;
   if (player.groundPoundCooldown > 0) player.groundPoundCooldown--;
 
+  for (let i = 0; i < attackTrail.length; i++) {
+    attackTrail[i].alpha -= 0.032;
+  }
+  attackTrail = attackTrail.filter((p) => p.alpha > 0);
+
   if (player.upgrades.regen > 0) {
-    player.hp += (player.maxHp * 0.1 * player.upgrades.regen * dt60) / 60;
-    player.hp = Math.min(player.hp, player.maxHp);
+    player.regenAccumulatorMs = (player.regenAccumulatorMs || 0) + dt * 1000;
+    if (player.regenAccumulatorMs >= 1000) {
+      const heal = player.maxHp * 0.002 * player.upgrades.regen;
+      player.hp = Math.min(player.hp + heal, player.maxHp);
+      player.regenAccumulatorMs -= 1000;
+    }
   }
 
   updateWaveSpawn();
   enemies.forEach((e) => updateEnemy(e, dt60));
 
   if (!particles || !Array.isArray(particles)) particles = [];
-  // Частицы: летят → падают на пол → лежат 1–2 сек (restLife) → удаляются
   const REST_FRAMES_MIN = 60;
   const REST_FRAMES_MAX = 120;
   particles = particles.filter((p) => {
@@ -1331,9 +1312,6 @@ function loop(now) {
     c.alpha = Math.max(0, c.alpha - c.decay);
   });
   corpses = corpses.filter((c) => c.alpha > 0.05);
-
-  goreRemains.forEach((g) => (g.alpha -= 0.006));
-  goreRemains = goreRemains.filter((g) => g.alpha > 0.05);
 
   cameraTargetX = player.x - W / 3;
   cameraTargetX = Math.max(0, Math.min(cameraTargetX, ARENA_WIDTH - W));
@@ -1440,7 +1418,6 @@ function draw() {
     ctx.strokeRect(p.x, py, p.w, p.h);
   });
 
-  // ТЗ: у каждого врага HP-бар по центру над моделью, фиксированная ширина, виден всегда
   const ENEMY_HP_BAR_W = 28;
   const ENEMY_HP_BAR_H = 4;
   enemies.forEach((e) => {
@@ -1514,28 +1491,28 @@ function draw() {
     player.hp > 50 ? "#22cc22" : player.hp > 25 ? "#ccaa22" : "#cc2222";
   ctx.fillRect(player.x, player.y - 10, barW * (player.hp / player.maxHp), 5);
 
+  const comboMultStick = 1 + (player.comboStacks || 0) * COMBO_RADIUS_PER_STACK;
+  const stickLen = Math.min(
+    MELEE_MAX_LENGTH,
+    Math.round(70 * MELEE_LENGTH_SCALE * comboMultStick)
+  );
+  const gripX = player.x + player.w / 2;
+  const gripY = player.y + player.h / 2;
+
   if (player.meleeFrames > 0) {
     const totalFrames = MELEE_ANIM_FRAMES;
     const progress = 1 - player.meleeFrames / totalFrames;
-    const extendPhase = progress <= 0.5 ? progress * 2 : 1;
-    const L = 1 + extendPhase * (MELEE_LENGTH_SCALE - 1);
-    const baseLen = 25;
-    const tipDist = Math.min(
-      MELEE_MAX_LENGTH - player.w,
-      Math.round(baseLen * L)
-    );
-    const cx = player.x + player.w / 2;
-    const cy = player.y + player.h / 2;
-    const ax = player.attackDirX;
-    const ay = player.attackDirY;
-    const tipX = cx + ax * tipDist;
-    const tipY = cy + ay * tipDist;
-    const alpha = 0.5 + progress * 0.5;
-    const bladeHalfW = 6;
+    const facing = player.attackFacing ?? player.facing;
+    const angle =
+      player.meleeVariant === MELEE_TOP_DOWN
+        ? -Math.PI / 2 + progress * Math.PI
+        : Math.PI / 2 - progress * Math.PI;
+    const tipX = gripX + facing * stickLen * Math.cos(angle);
+    const tipY = gripY + stickLen * Math.sin(angle);
 
-    if (meleeTrail.length < 8) meleeTrail.push({ x: tipX, y: tipY });
+    if (meleeTrail.length < 16) meleeTrail.push({ x: tipX, y: tipY });
     meleeTrail.forEach((p, i) => {
-      const a = (1 - i / meleeTrail.length) * 0.3;
+      const a = (1 - i / meleeTrail.length) * 0.35;
       if (a <= 0) return;
       ctx.fillStyle = `rgba(255, 160, 80, ${a})`;
       ctx.beginPath();
@@ -1543,11 +1520,13 @@ function draw() {
       ctx.fill();
     });
 
-    const perpX = -ay * bladeHalfW;
-    const perpY = ax * bladeHalfW;
+    const alpha = 0.5 + progress * 0.5;
+    const bladeHalfW = 6;
+    const perpX = -Math.sin(angle) * bladeHalfW;
+    const perpY = facing * Math.cos(angle) * bladeHalfW;
     ctx.beginPath();
-    ctx.moveTo(cx - perpX, cy - perpY);
-    ctx.lineTo(cx + perpX, cy + perpY);
+    ctx.moveTo(gripX - perpX, gripY - perpY);
+    ctx.lineTo(gripX + perpX, gripY + perpY);
     ctx.lineTo(tipX + perpX, tipY + perpY);
     ctx.lineTo(tipX - perpX, tipY - perpY);
     ctx.closePath();
@@ -1559,9 +1538,8 @@ function draw() {
     ctx.strokeStyle = `rgba(255, 200, 120, ${alpha})`;
     ctx.lineWidth = 2;
     ctx.stroke();
-
     ctx.beginPath();
-    ctx.moveTo(cx, cy);
+    ctx.moveTo(gripX, gripY);
     ctx.lineTo(tipX, tipY);
     ctx.strokeStyle = `rgba(255, 220, 150, ${alpha * 0.9})`;
     ctx.lineWidth = 4;
@@ -1578,7 +1556,15 @@ function draw() {
     }
   }
 
-  // Частицы — в мировых координатах; на полу рисуем с alpha=1 (видны все 2 сек), в полёте — по life
+  attackTrail.forEach((p, i) => {
+    if (p.alpha <= 0) return;
+    const a = p.alpha * (1 - i / Math.max(1, attackTrail.length)) * 0.5;
+    ctx.fillStyle = `rgba(255, 140, 60, ${a})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
   if (particles && particles.length > 0) {
     particles.forEach((p) => {
       const pr = typeof p.r === "number" && p.r > 0 ? p.r : 3;
@@ -1595,7 +1581,6 @@ function draw() {
 
   ctx.restore();
 
-  // ТЗ: перед волной — "ВОЛНА N" на весь экран, крупно, по центру, короткая анимация появления
   if (waveAnnounceFrames > 0) {
     const progress = 1 - waveAnnounceFrames / WAVE_ANNOUNCE_FRAMES;
     const appear = progress < 0.12 ? progress / 0.12 : 1;
@@ -1638,12 +1623,15 @@ function init() {
   player.cooldownReductions = 0;
   player.maxHp = 100;
   player.hp = player.maxHp;
+  player.regenAccumulatorMs = 0;
+  player.attackFacing = player.facing;
   kills = 0;
+  attackTrail = [];
+  meleeTrail = [];
   enemies = [];
   particles = [];
   bloodPools = [];
   corpses = [];
-  goreRemains = [];
   cameraX = 0;
   cameraTargetX = 0;
   cameraY = Math.max(0, Math.min(player.y - H / 2, ARENA_HEIGHT - H));

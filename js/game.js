@@ -167,7 +167,8 @@ function ensureAudio() {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     } catch (_) {}
   }
-  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  if (audioCtx && audioCtx.state === "suspended")
+    audioCtx.resume().catch(() => {});
   return audioCtx;
 }
 function playTone(freq, duration, type, vol, slideFreq) {
@@ -178,7 +179,11 @@ function playTone(freq, duration, type, vol, slideFreq) {
   o.connect(g);
   g.connect(ctx.destination);
   o.frequency.setValueAtTime(freq, ctx.currentTime);
-  if (slideFreq) o.frequency.exponentialRampToValueAtTime(slideFreq, ctx.currentTime + duration);
+  if (slideFreq)
+    o.frequency.exponentialRampToValueAtTime(
+      slideFreq,
+      ctx.currentTime + duration
+    );
   o.type = type || "square";
   g.gain.setValueAtTime(vol, ctx.currentTime);
   g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
@@ -267,6 +272,8 @@ function isFloor(p) {
 
 // Уровень пола/платформы в точке x (верх поверхности, на которую падают частицы)
 function getGroundY(x) {
+  if (!platforms || !platforms.length)
+    return typeof FLOOR_Y === "number" ? FLOOR_Y : 0;
   for (const plat of platforms) {
     if (plat.x <= x && x <= plat.x + plat.w) return plat.y;
   }
@@ -472,6 +479,7 @@ function tryMelee() {
 
 // —— Лимит частиц (производительность) ——
 function addParticle(p) {
+  if (!particles || !Array.isArray(particles)) particles = [];
   if (particles.length >= MAX_PARTICLES) particles.shift();
   particles.push(p);
 }
@@ -556,7 +564,10 @@ function spawnDashParticles(x, y) {
   const n = 14 + Math.floor(Math.random() * 10);
   const dir = player.facing;
   for (let i = 0; i < n; i++) {
-    const a = dir > 0 ? Math.PI * 0.3 + Math.random() * 0.4 * Math.PI : Math.PI * 0.5 + Math.random() * 0.4 * Math.PI;
+    const a =
+      dir > 0
+        ? Math.PI * 0.3 + Math.random() * 0.4 * Math.PI
+        : Math.PI * 0.5 + Math.random() * 0.4 * Math.PI;
     const sp = 3 + Math.random() * 5;
     addParticle({
       x: x + (Math.random() - 0.5) * 20,
@@ -1281,10 +1292,10 @@ function loop(now) {
   updateWaveSpawn();
   enemies.forEach((e) => updateEnemy(e, dt60));
 
-  const PARTICLE_GRAVITY = 0.5;
-  const PARTICLE_REST_FRAMES_MIN = 60; // 1 сек на полу
-  const PARTICLE_REST_FRAMES_MAX = 120; // 2 сек на полу
-
+  if (!particles || !Array.isArray(particles)) particles = [];
+  // Частицы: летят → падают на пол → лежат 1–2 сек (restLife) → удаляются
+  const REST_FRAMES_MIN = 60;
+  const REST_FRAMES_MAX = 120;
   particles = particles.filter((p) => {
     if (p.grounded) {
       p.restLife = (p.restLife ?? 0) - 1;
@@ -1292,25 +1303,23 @@ function loop(now) {
     }
     p.x += p.vx;
     p.y += p.vy;
-    p.vy += GRAVITY * PARTICLE_GRAVITY;
+    p.vy += GRAVITY * 0.5;
     p.vx *= 0.98;
+    const r = p.r != null ? p.r : 3;
     const groundY = getGroundY(p.x);
-    const bottom = p.y + p.r;
-    if (bottom >= groundY) {
-      p.y = groundY - p.r;
+    if (p.y + r >= groundY) {
+      p.y = groundY - r;
       p.vy = 0;
       p.vx *= 0.3;
       p.grounded = true;
       p.restLife =
-        PARTICLE_REST_FRAMES_MIN +
-        Math.floor(
-          Math.random() *
-            (PARTICLE_REST_FRAMES_MAX - PARTICLE_REST_FRAMES_MIN + 1)
-        );
+        REST_FRAMES_MIN +
+        Math.floor(Math.random() * (REST_FRAMES_MAX - REST_FRAMES_MIN + 1));
       p.maxRestLife = p.restLife;
+      return true;
     }
-    p.life -= 1;
-    return p.life > 0 || p.grounded;
+    p.life = (p.life != null ? p.life : 30) - 1;
+    return p.life > 0;
   });
 
   bloodPools.forEach((p) => {
@@ -1415,17 +1424,6 @@ function draw() {
     if (c.y + c.h < cameraY - 50 || c.y > cameraY + H + 50) return;
     ctx.fillStyle = `rgba(60, 20, 15, ${c.alpha})`;
     ctx.fillRect(c.x, c.y, c.w, c.h);
-  });
-
-  particles.forEach((p) => {
-    if (p.x < cameraX - 20 || p.x > cameraX + W + 20) return;
-    if (p.y < cameraY - 20 || p.y > cameraY + H + 20) return;
-    ctx.fillStyle = p.color;
-    ctx.globalAlpha = p.grounded
-      ? p.restLife / (p.maxRestLife || 1)
-      : p.life / p.maxLife;
-    ctx.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
-    ctx.globalAlpha = 1;
   });
 
   platforms.forEach((p) => {
@@ -1578,6 +1576,21 @@ function draw() {
       ctx.arc(tipX, tipY, 10 + glow * 6, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  // Частицы — в мировых координатах; на полу рисуем с alpha=1 (видны все 2 сек), в полёте — по life
+  if (particles && particles.length > 0) {
+    particles.forEach((p) => {
+      const pr = typeof p.r === "number" && p.r > 0 ? p.r : 3;
+      const px = Number(p.x);
+      const py = Number(p.y);
+      const alpha = p.grounded ? 1 : Number(p.life) / (Number(p.maxLife) || 1);
+      if (alpha <= 0) return;
+      ctx.fillStyle = p.color || "#cc6644";
+      ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+      ctx.fillRect(px - pr, py - pr, pr * 2, pr * 2);
+      ctx.globalAlpha = 1;
+    });
   }
 
   ctx.restore();

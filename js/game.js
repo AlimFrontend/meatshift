@@ -48,13 +48,13 @@ const TRAINING_PLATFORMS = 6;
 const WAVE_PAUSE_MIN = 80;
 const WAVE_PAUSE_EXTRA = 70;
 const PARTICLE_LIFETIME = 90; // 1–2 сек, не перегружать
-const MAX_PARTICLES = 140;
+const MAX_PARTICLES = 220;
 const LANDING_DUST_VEL = 8; // порог падения для пыли
 const BLOOD_POOL_DECAY = 0.012;
 const MAX_ENEMIES = 80; // лимит одновременных врагов (волны масштабируются)
 const MELEE_KNOCKBACK = 7; // фиксированное отталкивание врага от игрока при ударе
-const MELEE_PARTICLE_COUNT_MIN = 8;
-const MELEE_PARTICLE_COUNT_MAX = 15;
+const MELEE_PARTICLE_COUNT_MIN = 14;
+const MELEE_PARTICLE_COUNT_MAX = 24;
 const MELEE_PARTICLE_LIFE = 18; // быстро исчезают
 const BONUS_APPEAR_DELAY = 60; // 1.0 сек после последнего врага до экрана бонусов
 const WAVE_ANNOUNCE_FRAMES = 75; // ~1.25 сек показ "ВОЛНА N"
@@ -159,26 +159,70 @@ function getGroundPoundCooldown() {
 
 let dashUsesLeft = 1;
 
-// —— Звук удара (beep, включается после первого клика) ——
+// —— Звуки (Web Audio API, процедурные) ——
 let audioCtx = null;
-function playHitSound() {
+function ensureAudio() {
   if (!audioCtx) {
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     } catch (_) {}
   }
-  if (!audioCtx) return;
-  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
-  const o = audioCtx.createOscillator();
-  const g = audioCtx.createGain();
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+function playTone(freq, duration, type, vol, slideFreq) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
   o.connect(g);
-  g.connect(audioCtx.destination);
-  o.frequency.value = 120;
-  o.type = "square";
-  g.gain.setValueAtTime(0.08, audioCtx.currentTime);
-  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.06);
-  o.start(audioCtx.currentTime);
-  o.stop(audioCtx.currentTime + 0.06);
+  g.connect(ctx.destination);
+  o.frequency.setValueAtTime(freq, ctx.currentTime);
+  if (slideFreq) o.frequency.exponentialRampToValueAtTime(slideFreq, ctx.currentTime + duration);
+  o.type = type || "square";
+  g.gain.setValueAtTime(vol, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  o.start(ctx.currentTime);
+  o.stop(ctx.currentTime + duration);
+}
+
+function playHitSound() {
+  ensureAudio();
+  if (!audioCtx) return;
+  playTone(120, 0.06, "square", 0.08);
+}
+function playJumpSound() {
+  playTone(280, 0.08, "sine", 0.06, 380);
+}
+function playDoubleJumpSound() {
+  playTone(420, 0.06, "sine", 0.05, 520);
+}
+function playDashSound() {
+  playTone(180, 0.04, "sawtooth", 0.04, 90);
+}
+function playMeleeSwingSound() {
+  playTone(90, 0.03, "sawtooth", 0.05);
+}
+function playMeleeHitSound() {
+  playTone(150, 0.05, "square", 0.06, 100);
+}
+function playKillSound() {
+  playTone(200, 0.1, "square", 0.07, 80);
+}
+function playGroundPoundSound() {
+  playTone(70, 0.12, "sine", 0.1, 45);
+}
+function playUpgradeSound() {
+  playTone(330, 0.06, "sine", 0.05, 440);
+  setTimeout(() => {
+    if (audioCtx) playTone(440, 0.08, "sine", 0.05, 550);
+  }, 80);
+}
+function playWaveSound() {
+  playTone(220, 0.1, "square", 0.06, 180);
+}
+function playPickUpgradeSound() {
+  playTone(520, 0.05, "sine", 0.06, 660);
 }
 
 // —— Триггер при уроне игроку: пауза + тряска + flash + звук ——
@@ -219,6 +263,14 @@ function getPlatformAt(x) {
 
 function isFloor(p) {
   return p.y >= FLOOR_Y - 2 && p.y <= FLOOR_Y + 2 && p.w >= ARENA_WIDTH - 10;
+}
+
+// Уровень пола/платформы в точке x (верх поверхности, на которую падают частицы)
+function getGroundY(x) {
+  for (const plat of platforms) {
+    if (plat.x <= x && x <= plat.x + plat.w) return plat.y;
+  }
+  return FLOOR_Y;
 }
 
 const PORTAL_POSITIONS = [];
@@ -338,18 +390,6 @@ window.addEventListener("keyup", (e) => {
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-let mouseCanvasX = null;
-let mouseCanvasY = null;
-function updateMousePosition(e) {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  mouseCanvasX = (e.clientX - rect.left) * scaleX;
-  mouseCanvasY = (e.clientY - rect.top) * scaleY;
-}
-canvas.addEventListener("mousemove", updateMousePosition);
-canvas.addEventListener("mouseenter", updateMousePosition);
-
 // —— Прыжок, даш, атака ——
 function tryJump() {
   if (player.dashFrames > 0) return;
@@ -357,9 +397,13 @@ function tryJump() {
     player.vy = JUMP_VEL;
     player.grounded = false;
     player.usedDoubleJump = false;
+    playJumpSound();
+    spawnJumpDust(player.x + player.w / 2, player.y + player.h);
   } else if (!player.usedDoubleJump && player.canDoubleJump) {
     player.vy = DOUBLE_JUMP_VEL;
     player.usedDoubleJump = true;
+    playDoubleJumpSound();
+    spawnDoubleJumpParticles(player.x + player.w / 2, player.y + player.h / 2);
   }
 }
 function tryWallJump() {
@@ -381,6 +425,8 @@ function tryDash() {
   player.dashFrames = DASH_FRAMES;
   player.dashDir = player.facing;
   player.dashCooldown = getDashCooldown();
+  playDashSound();
+  spawnDashParticles(player.x + player.w / 2, player.y + player.h / 2);
 }
 const MELEE_TOP_DOWN = 0; // взмах сверху вниз
 const MELEE_BOTTOM_UP = 1; // взмах снизу вверх
@@ -391,31 +437,21 @@ const MELEE_COOLDOWN_FRAMES = 25;
 // Масштаб: длина меча 1.5–2× на замахе, толщина 1.2–1.5×, макс длина ≈2.5–3 ширины игрока (32px)
 const MELEE_LENGTH_SCALE = 1.8;
 const MELEE_THICKNESS_SCALE = 1.35;
-const MELEE_MAX_LENGTH = Math.min(96, PLAYER_W * 2.8);
-// Комбо: следующая атака в течение 0.5 сек → +20% радиуса хитбокса, макс 3 стака (+60%). Не влияет на урон и анимацию.
+const MELEE_MAX_LENGTH = Math.min(130, PLAYER_W * 3.5);
+// Комбо: следующая атака в течение 0.5 сек → +40% радиуса хитбокса, макс 3 стака (+120%). Не влияет на урон и анимацию.
 const COMBO_WINDOW_FRAMES = 30; // 0.5 сек при 60 FPS
-const COMBO_RADIUS_PER_STACK = 0.2; // +20% за стак
+const COMBO_RADIUS_PER_STACK = 0.4; // +40% за стак
 const COMBO_MAX_STACKS = 3;
 const MELEE_HIT_MARGIN = 28; // ширина зоны попадания вдоль сегмента атаки
 
 function tryMelee() {
   if (player.meleeCooldown > 0 || player.meleeFrames > 0) return;
-  if (mouseCanvasX == null || mouseCanvasY == null) return; // курсор отсутствует — атака отменяется
 
-  const cx = player.x + player.w / 2;
-  const cy = player.y + player.h / 2;
-  const mouseWorldX = cameraX + mouseCanvasX;
-  const mouseWorldY = cameraY + mouseCanvasY;
-  let dx = mouseWorldX - cx;
-  let dy = mouseWorldY - cy;
-  const len = Math.hypot(dx, dy);
-  if (len < 1) return; // курсор почти в игроке — не нормализуем
-  dx /= len;
-  dy /= len;
-
-  player.attackDirX = dx;
-  player.attackDirY = dy;
-  player.attackAngle = Math.atan2(dy, dx);
+  // Направление атаки = направление движения (facing)
+  const dir = player.facing;
+  player.attackDirX = dir;
+  player.attackDirY = 0;
+  player.attackAngle = dir > 0 ? 0 : Math.PI;
 
   if (player.comboFrames > COMBO_WINDOW_FRAMES) player.comboStacks = 0;
   else
@@ -431,6 +467,7 @@ function tryMelee() {
     ? MELEE_BOTTOM_UP
     : MELEE_TOP_DOWN;
   player.meleeAlternate = 1 - player.meleeAlternate;
+  playMeleeSwingSound();
 }
 
 // —— Лимит частиц (производительность) ——
@@ -442,7 +479,7 @@ function addParticle(p) {
 // —— Ground Pound: частицы и разброс синхронизированы с радиусом AoE ——
 function spawnGroundPoundEffect(x, y) {
   const scale = GROUND_POUND_RADIUS / 60; // относительный масштаб (база 60)
-  const n = Math.floor(18 * scale) + Math.floor(Math.random() * 10 * scale);
+  const n = Math.floor(28 * scale) + Math.floor(Math.random() * 16 * scale);
   const spread = 2 + Math.random() * 5 * scale;
   const life = Math.round(55 * scale);
   for (let i = 0; i < n; i++) {
@@ -462,7 +499,7 @@ function spawnGroundPoundEffect(x, y) {
 }
 
 function spawnLandingDust(x, y) {
-  const n = 8 + Math.floor(Math.random() * 5);
+  const n = 14 + Math.floor(Math.random() * 8);
   for (let i = 0; i < n; i++) {
     const a = Math.PI * 0.3 + Math.random() * Math.PI * 0.4;
     const sp = 1.5 + Math.random() * 3;
@@ -479,9 +516,64 @@ function spawnLandingDust(x, y) {
   }
 }
 
-// —— Частицы и горе (15–20 за удар/смерть, тянутся вниз гравитацией) ——
+function spawnJumpDust(x, y) {
+  const n = 10 + Math.floor(Math.random() * 6);
+  for (let i = 0; i < n; i++) {
+    const a = Math.PI * 0.5 + Math.random() * Math.PI * 0.5;
+    const sp = 2 + Math.random() * 4;
+    addParticle({
+      x: x + (Math.random() - 0.5) * 24,
+      y,
+      vx: Math.cos(a) * sp * (Math.random() > 0.5 ? 1 : -1),
+      vy: -1 - Math.random() * 3,
+      r: 3 + Math.random() * 5,
+      life: 45,
+      maxLife: 45,
+      color: "#4a4540",
+    });
+  }
+}
+
+function spawnDoubleJumpParticles(x, y) {
+  const n = 12 + Math.floor(Math.random() * 8);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 1.5 + Math.random() * 3;
+    addParticle({
+      x: x + (Math.random() - 0.5) * 16,
+      y: y + (Math.random() - 0.5) * 8,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp - 2,
+      r: 2 + Math.random() * 3,
+      life: 35,
+      maxLife: 35,
+      color: i % 3 === 0 ? "#6a6a88" : "#4a4a60",
+    });
+  }
+}
+
+function spawnDashParticles(x, y) {
+  const n = 14 + Math.floor(Math.random() * 10);
+  const dir = player.facing;
+  for (let i = 0; i < n; i++) {
+    const a = dir > 0 ? Math.PI * 0.3 + Math.random() * 0.4 * Math.PI : Math.PI * 0.5 + Math.random() * 0.4 * Math.PI;
+    const sp = 3 + Math.random() * 5;
+    addParticle({
+      x: x + (Math.random() - 0.5) * 20,
+      y: y + (Math.random() - 0.5) * 12,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp * 0.5,
+      r: 2.5 + Math.random() * 3,
+      life: 28,
+      maxLife: 28,
+      color: i % 2 === 0 ? "#5a5566" : "#3a3540",
+    });
+  }
+}
+
+// —— Частицы и горе (25–35 за удар/смерть, тянутся вниз гравитацией) ——
 function spawnGore(x, y, size) {
-  const n = 15 + Math.floor(Math.random() * 6);
+  const n = 25 + Math.floor(Math.random() * 11);
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 4 + Math.random() * 8;
@@ -551,7 +643,7 @@ function spawnMeleeHitParticles(variant, x, y, attackAngle) {
 }
 
 function spawnBottomUpDustFromPlatform(px, py) {
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 12; i++) {
     addParticle({
       x: px + (Math.random() - 0.5) * 40,
       y: py,
@@ -567,7 +659,7 @@ function spawnBottomUpDustFromPlatform(px, py) {
 
 function spawnMissEffect(x, y, grounded) {
   if (grounded) {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 12; i++) {
       const a = Math.PI * 0.2 + Math.random() * Math.PI * 0.6;
       const sp = 1 + Math.random() * 2;
       addParticle({
@@ -582,7 +674,7 @@ function spawnMissEffect(x, y, grounded) {
       });
     }
   } else {
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 16; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = 0.8 + Math.random() * 2;
       addParticle({
@@ -600,7 +692,7 @@ function spawnMissEffect(x, y, grounded) {
 }
 
 function spawnHitParticles(x, y) {
-  const n = 15 + Math.floor(Math.random() * 6);
+  const n = 24 + Math.floor(Math.random() * 10);
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 1.5 + Math.random() * 4;
@@ -622,7 +714,9 @@ function damageEnemy(e, dmg, knockbackDir) {
   if (e.hp <= 0) {
     spawnGore(e.x + e.w / 2, e.y + e.h / 2, e.w);
     killEnemy(e);
+    playKillSound();
   } else {
+    playMeleeHitSound();
     if (knockbackDir) {
       e.vx += knockbackDir.x * MELEE_KNOCKBACK;
       e.vy += knockbackDir.y * MELEE_KNOCKBACK;
@@ -913,6 +1007,7 @@ const UPGRADE_LIST = [
 ];
 
 function applyUpgrade(id) {
+  playPickUpgradeSound();
   if (id === "cooldown") {
     if ((player.cooldownReductions || 0) < 2)
       player.cooldownReductions = (player.cooldownReductions || 0) + 1;
@@ -935,6 +1030,7 @@ function applyUpgrade(id) {
     )
   );
   waveAnnounceFrames = WAVE_ANNOUNCE_FRAMES;
+  playWaveSound();
 }
 
 function openUpgradeScreen() {
@@ -953,6 +1049,7 @@ function openUpgradeScreen() {
     container.appendChild(btn);
   });
   document.getElementById("upgradeScreen").classList.add("visible");
+  playUpgradeSound();
 }
 
 // —— Кровь под ногами (скольжение) ——
@@ -1096,7 +1193,7 @@ function loop(now) {
         platformShakeFrames = Math.round(10 * shakeScale);
         player.groundPoundLandingFrames = GROUND_POUND_LANDING_FRAMES;
         player.groundPoundCooldown = getGroundPoundCooldown();
-        playHitSound();
+        playGroundPoundSound();
       } else if (fallVy >= LANDING_DUST_VEL) {
         spawnLandingDust(player.x + player.w / 2, player.y + player.h);
         platformShakeFrames = 6;
@@ -1121,7 +1218,7 @@ function loop(now) {
       const comboMult = 1 + (player.comboStacks || 0) * COMBO_RADIUS_PER_STACK;
       const hitLen = Math.min(
         MELEE_MAX_LENGTH,
-        Math.round(50 * MELEE_LENGTH_SCALE * comboMult)
+        Math.round(70 * MELEE_LENGTH_SCALE * comboMult)
       );
       const cx = player.x + player.w / 2;
       const cy = player.y + player.h / 2;
@@ -1184,13 +1281,36 @@ function loop(now) {
   updateWaveSpawn();
   enemies.forEach((e) => updateEnemy(e, dt60));
 
+  const PARTICLE_GRAVITY = 0.5;
+  const PARTICLE_REST_FRAMES_MIN = 60; // 1 сек на полу
+  const PARTICLE_REST_FRAMES_MAX = 120; // 2 сек на полу
+
   particles = particles.filter((p) => {
+    if (p.grounded) {
+      p.restLife = (p.restLife ?? 0) - 1;
+      return p.restLife > 0;
+    }
     p.x += p.vx;
     p.y += p.vy;
-    p.vy += GRAVITY * 0.5;
+    p.vy += GRAVITY * PARTICLE_GRAVITY;
     p.vx *= 0.98;
+    const groundY = getGroundY(p.x);
+    const bottom = p.y + p.r;
+    if (bottom >= groundY) {
+      p.y = groundY - p.r;
+      p.vy = 0;
+      p.vx *= 0.3;
+      p.grounded = true;
+      p.restLife =
+        PARTICLE_REST_FRAMES_MIN +
+        Math.floor(
+          Math.random() *
+            (PARTICLE_REST_FRAMES_MAX - PARTICLE_REST_FRAMES_MIN + 1)
+        );
+      p.maxRestLife = p.restLife;
+    }
     p.life -= 1;
-    return p.life > 0;
+    return p.life > 0 || p.grounded;
   });
 
   bloodPools.forEach((p) => {
@@ -1301,7 +1421,9 @@ function draw() {
     if (p.x < cameraX - 20 || p.x > cameraX + W + 20) return;
     if (p.y < cameraY - 20 || p.y > cameraY + H + 20) return;
     ctx.fillStyle = p.color;
-    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.globalAlpha = p.grounded
+      ? p.restLife / (p.maxRestLife || 1)
+      : p.life / p.maxLife;
     ctx.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
     ctx.globalAlpha = 1;
   });
@@ -1399,7 +1521,6 @@ function draw() {
     const progress = 1 - player.meleeFrames / totalFrames;
     const extendPhase = progress <= 0.5 ? progress * 2 : 1;
     const L = 1 + extendPhase * (MELEE_LENGTH_SCALE - 1);
-    const T = MELEE_THICKNESS_SCALE;
     const baseLen = 25;
     const tipDist = Math.min(
       MELEE_MAX_LENGTH - player.w,
@@ -1411,73 +1532,50 @@ function draw() {
     const ay = player.attackDirY;
     const tipX = cx + ax * tipDist;
     const tipY = cy + ay * tipDist;
-    const alpha = 0.6 + progress * 0.35;
+    const alpha = 0.5 + progress * 0.5;
+    const bladeHalfW = 6;
 
     if (meleeTrail.length < 8) meleeTrail.push({ x: tipX, y: tipY });
     meleeTrail.forEach((p, i) => {
-      const a = (1 - i / meleeTrail.length) * 0.35;
+      const a = (1 - i / meleeTrail.length) * 0.3;
       if (a <= 0) return;
-      ctx.fillStyle = `rgba(255, 140, 60, ${a})`;
+      ctx.fillStyle = `rgba(255, 160, 80, ${a})`;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
       ctx.fill();
     });
 
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(player.attackAngle);
-    ctx.translate(-cx, -cy);
-    const dir = 1;
-    const tipLocalX = cx + dir * tipDist;
-    const tipLocalY = cy;
-    if (player.meleeVariant === MELEE_TOP_DOWN) {
-      const slashY = player.y - 15 * L + progress * (player.h + 40 * L);
-      ctx.strokeStyle = `rgba(255, 180, 80, ${alpha})`;
-      ctx.lineWidth = Math.max(2, Math.round(12 * T));
-      ctx.beginPath();
-      ctx.moveTo(cx - dir * 20 * L, player.y - 10);
-      ctx.lineTo(cx + dir * 25 * L, slashY);
-      ctx.stroke();
-      ctx.fillStyle = `rgba(255, 120, 50, ${alpha * 0.5})`;
-      ctx.beginPath();
-      ctx.moveTo(cx, player.y);
-      ctx.lineTo(cx + dir * 35 * L, slashY + 15);
-      ctx.lineTo(cx + dir * 45 * L, tipLocalY);
-      ctx.lineTo(cx, player.y + player.h);
-      ctx.closePath();
-      ctx.fill();
-    } else {
-      const slashY =
-        player.y + player.h + 20 * L - progress * (player.h + 50 * L);
-      ctx.strokeStyle = `rgba(255, 160, 70, ${alpha})`;
-      ctx.lineWidth = Math.max(2, Math.round(12 * T));
-      ctx.beginPath();
-      ctx.moveTo(cx + dir * 20 * L, player.y + player.h + 10);
-      ctx.lineTo(cx - dir * 25 * L, slashY);
-      ctx.stroke();
-      ctx.fillStyle = `rgba(200, 80, 40, ${alpha * 0.5})`;
-      ctx.fillRect(cx - 30 * L, player.y + player.h, 60 * L, 8);
-      ctx.fillStyle = `rgba(255, 100, 50, ${alpha * 0.5})`;
-      ctx.beginPath();
-      ctx.moveTo(cx, player.y + player.h);
-      ctx.lineTo(cx - dir * 40 * L, slashY - 10);
-      ctx.lineTo(cx - dir * 50 * L, tipLocalY);
-      ctx.lineTo(cx, player.y);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.restore();
+    const perpX = -ay * bladeHalfW;
+    const perpY = ax * bladeHalfW;
+    ctx.beginPath();
+    ctx.moveTo(cx - perpX, cy - perpY);
+    ctx.lineTo(cx + perpX, cy + perpY);
+    ctx.lineTo(tipX + perpX, tipY + perpY);
+    ctx.lineTo(tipX - perpX, tipY - perpY);
+    ctx.closePath();
+    ctx.fillStyle =
+      player.meleeVariant === MELEE_TOP_DOWN
+        ? `rgba(255, 180, 90, ${alpha * 0.85})`
+        : `rgba(255, 120, 60, ${alpha * 0.85})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255, 200, 120, ${alpha})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(tipX, tipY);
+    ctx.strokeStyle = `rgba(255, 220, 150, ${alpha * 0.9})`;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.stroke();
 
     if (player.meleeHitFlash > 0) {
-      const flashMax = Math.round(12 * MELEE_THICKNESS_SCALE);
-      const glow = player.meleeHitFlash / flashMax;
-      ctx.fillStyle = `rgba(255, 220, 150, ${glow})`;
+      const glow =
+        player.meleeHitFlash / Math.round(12 * MELEE_THICKNESS_SCALE);
+      ctx.fillStyle = `rgba(255, 230, 180, ${glow})`;
       ctx.beginPath();
-      ctx.arc(tipX, tipY, 12 * T + glow * 8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = `rgba(255, 255, 200, ${glow * 0.8})`;
-      ctx.beginPath();
-      ctx.arc(tipX, tipY, 6 * T, 0, Math.PI * 2);
+      ctx.arc(tipX, tipY, 10 + glow * 6, 0, Math.PI * 2);
       ctx.fill();
     }
   }

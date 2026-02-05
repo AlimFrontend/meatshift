@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MEAT SHIFT</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #0a0a0a;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        overflow: hidden;
+        font-family: "Courier New", monospace;
+      }
+      #gameContainer {
+        position: relative;
+        box-shadow: 0 0 60px rgba(255, 80, 60, 0.3);
+        border: 2px solid #ff3020;
+      }
+      #gameCanvas {
+        display: block;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+      #ui {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 12px 20px;
+        color: #ffdd88;
+        font-size: 14px;
+        display: flex;
+        justify-content: space-between;
+        pointer-events: none;
+        text-shadow: 0 0 8px #000, 0 0 4px #000;
+      }
+      #ui .overdrive-bar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #ff3020, #ffaa00);
+        transition: width 0.15s;
+      }
+      #upgradeScreen {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        color: #fff;
+        z-index: 100;
+      }
+      #upgradeScreen.visible {
+        display: flex;
+      }
+      #upgradeScreen h2 {
+        color: #ff6644;
+        margin-bottom: 24px;
+        font-size: 24px;
+      }
+      #upgradeButtons {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        justify-content: center;
+        max-width: 500px;
+      }
+      #upgradeButtons button {
+        padding: 16px 24px;
+        font-family: inherit;
+        font-size: 14px;
+        background: #2a1510;
+        border: 2px solid #ff6644;
+        color: #ffdd88;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      #upgradeButtons button:hover {
+        background: #ff6644;
+        color: #0a0a0a;
+        transform: scale(1.05);
+      }
+      #gameOver {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.9);
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        color: #ff3020;
+        z-index: 101;
+      }
+      #gameOver.visible {
+        display: flex;
+      }
+      #gameOver h1 {
+        font-size: 48px;
+        margin-bottom: 16px;
+      }
+      #gameOver p {
+        margin-bottom: 24px;
+        color: #ccc;
+      }
+      #gameOver button {
+        padding: 16px 32px;
+        font-family: inherit;
+        font-size: 18px;
+        background: #ff3020;
+        border: none;
+        color: #fff;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="gameContainer">
+      <div
+        class="overdrive-bar"
+        id="overdriveBar"
+        style="
+          position: absolute;
+          top: 0;
+          left: 0;
+          height: 4px;
+          background: linear-gradient(90deg, #ff3020, #ffaa00);
+          width: 0%;
+          transition: width 0.15s;
+          z-index: 10;
+        "
+      ></div>
+      <div id="ui">
+        <span>Убийств: <span id="kills">0</span></span>
+        <span>Скорость: <span id="speed">1.0</span>x</span>
+        <span>Даш: <span id="overdriveText">—</span></span>
+        <span
+          >W прыжок · Пробел атака · S в воздухе удар вниз (КД 3 с) · Shift даш
+          (КД 5 с)</span
+        >
+      </div>
+      <div id="upgradeScreen">
+        <h2>ВЫБОР УСИЛЕНИЯ</h2>
+        <p style="margin-bottom: 16px; color: #aaa">
+          Только между волнами · сбрасывается при смерти
+        </p>
+        <div id="upgradeButtons"></div>
+      </div>
+      <div id="gameOver">
+        <h1>ПОТРАЧЕНО</h1>
+        <p>Убийств: <span id="finalKills">0</span></p>
+        <button id="restartBtn">ЕЩЁ РАЗ</button>
+      </div>
+      <canvas id="gameCanvas" width="960" height="640"></canvas>
+    </div>
+    <script src="js/game.js"></script>
+  </body>
+</html>

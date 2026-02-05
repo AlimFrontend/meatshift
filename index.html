@@ -29,26 +29,37 @@
         image-rendering: pixelated;
         image-rendering: crisp-edges;
       }
-      #ui {
+      #hud {
         position: absolute;
         top: 0;
         left: 0;
         right: 0;
-        padding: 12px 20px;
-        color: #ffdd88;
-        font-size: 14px;
-        display: flex;
-        justify-content: space-between;
+        bottom: 0;
         pointer-events: none;
-        text-shadow: 0 0 8px #000, 0 0 4px #000;
+        z-index: 5;
       }
-      #ui .overdrive-bar {
+      #buffsPanel {
+        position: absolute;
+        top: 56px;
+        left: 12px;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid #ff6644;
+        color: #ffdd88;
+        font-size: 11px;
+        font-family: "Courier New", monospace;
+        line-height: 1.4;
+        pointer-events: none;
+        z-index: 6;
+      }
+      #overdriveBar {
         position: absolute;
         top: 0;
         left: 0;
         height: 4px;
         background: linear-gradient(90deg, #ff3020, #ffaa00);
         transition: width 0.15s;
+        z-index: 10;
       }
       #upgradeScreen {
         position: absolute;
@@ -126,29 +137,9 @@
   </head>
   <body>
     <div id="gameContainer">
-      <div
-        class="overdrive-bar"
-        id="overdriveBar"
-        style="
-          position: absolute;
-          top: 0;
-          left: 0;
-          height: 4px;
-          background: linear-gradient(90deg, #ff3020, #ffaa00);
-          width: 0%;
-          transition: width 0.15s;
-          z-index: 10;
-        "
-      ></div>
-      <div id="ui">
-        <span>Убийств: <span id="kills">0</span></span>
-        <span>Скорость: <span id="speed">1.0</span>x</span>
-        <span>Даш: <span id="overdriveText">—</span></span>
-        <span
-          >W прыжок · Пробел атака · S в воздухе удар вниз (КД 3 с) · Shift даш
-          (КД 5 с)</span
-        >
-      </div>
+      <canvas id="hud" width="960" height="640"></canvas>
+      <div id="overdriveBar" style="width: 0%"></div>
+      <div id="buffsPanel"></div>
       <div id="upgradeScreen">
         <h2>ВЫБОР УСИЛЕНИЯ</h2>
         <p style="margin-bottom: 16px; color: #aaa">

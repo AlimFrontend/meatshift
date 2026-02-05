@@ -2,6 +2,8 @@
 
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
+const hudCanvas = document.getElementById("hud");
+const hudCtx = hudCanvas ? hudCanvas.getContext("2d") : null;
 const W = canvas.width;
 const H = canvas.height;
 
@@ -88,6 +90,10 @@ let waveEnemiesSpawned = 0;
 let waveAnnounceFrames = WAVE_ANNOUNCE_FRAMES;
 let wavePauseFrames = 0;
 let waveBonusDelayFrames = -1;
+const HUD_COUNTER_PULSE_FRAMES = 240;
+const HUD_COUNTER_PULSE_GROW_FRAMES = 120;
+let hudKillWavePulseFrames = 0;
+let hudCounterScale = 1;
 
 const player = {
   x: 200,
@@ -120,18 +126,22 @@ const player = {
   meleeAlternate: 0,
   comboFrames: 999,
   comboStacks: 0,
+  comboResetAfterSwing: false,
   attackFacing: 1,
   groundPound: false,
   groundPoundLandingFrames: 0,
   groundPoundCooldown: 0,
   regenAccumulatorMs: 0,
+  bossBuffFrames: 0,
 };
 
 function runSpeed() {
-  return RUN_MAX * Math.pow(1.1, player.upgrades.speed);
+  const bossMult = player.bossBuffFrames > 0 ? 1.1 : 1;
+  return RUN_MAX * Math.pow(1.1, player.upgrades.speed) * bossMult;
 }
 function meleeDamage() {
-  return 18 * Math.pow(1.1, player.upgrades.damage);
+  const bossMult = player.bossBuffFrames > 0 ? 1.1 : 1;
+  return 18 * Math.pow(1.1, player.upgrades.damage) * bossMult;
 }
 function getDashCooldown() {
   return Math.max(60, DASH_COOLDOWN - (player.cooldownReductions || 0) * 60);
@@ -396,10 +406,11 @@ const MELEE_COOLDOWN_FRAMES = Math.max(1, Math.floor(25 / MELEE_ANIM_SPEED));
 const MELEE_LENGTH_SCALE = 1.8;
 const MELEE_THICKNESS_SCALE = 1.35;
 const MELEE_MAX_LENGTH = Math.min(130, PLAYER_W * 3.5);
-const COMBO_WINDOW_FRAMES = 60;
+const COMBO_WINDOW_FRAMES = Math.round(0.6 * 60);
 const COMBO_RADIUS_PER_STACK = 0.4;
 const COMBO_MAX_STACKS = 3;
 const MELEE_HIT_MARGIN = 28;
+const MELEE_HIT_MARGIN_BOSS = 48;
 
 function tryMelee() {
   if (player.meleeCooldown > 0 || player.meleeFrames > 0) return;
@@ -412,6 +423,8 @@ function tryMelee() {
       (player.comboStacks || 0) + 1
     );
   player.comboFrames = 0;
+  if (player.comboStacks >= COMBO_MAX_STACKS)
+    player.comboResetAfterSwing = true;
 
   player.meleeFrames = MELEE_ANIM_FRAMES;
   player.meleeCooldown = MELEE_COOLDOWN_FRAMES;
@@ -555,10 +568,22 @@ function spawnGore(x, y, size) {
 }
 
 function killEnemy(e) {
+  if (e.type === "boss" && Math.random() < BOSS_GIANT_BONE_DROP_CHANCE) {
+    pickups.push({
+      x: e.x + e.w / 2 - 14,
+      y: e.y + e.h / 2 - 14,
+      w: 28,
+      h: 28,
+      type: "giant_bone",
+    });
+  }
+  if (e.type !== "boss") {
+    bonesCount += 1 + Math.floor(Math.random() * 6);
+  }
   const idx = enemies.indexOf(e);
   if (idx !== -1) enemies.splice(idx, 1);
   kills++;
-  // Апгрейды только в конце волны (см. проверку wave cleared в loop)
+  hudKillWavePulseFrames = HUD_COUNTER_PULSE_FRAMES;
 }
 
 function spawnMeleeHitParticles(variant, x, y, attackAngle) {
@@ -728,6 +753,16 @@ const ENEMY_TYPES = {
     baseDmg: 14,
     canBeKnockedBack: false,
   },
+  boss: {
+    hp: 530,
+    w: 80,
+    h: 96,
+    speed: 2.8 * 0.7,
+    color: "#402020",
+    big: true,
+    baseDmg: 28,
+    canBeKnockedBack: false,
+  },
 };
 
 // Враги только из порталов. ТЗ: масштабирование волн — HP и урон +10% за волну
@@ -773,6 +808,11 @@ function spawnEnemyFromSide(side, waveIndex) {
 
 let waveCount = 1; // текущая волна (1-based), бесконечные волны
 let waveSpawnCooldown = 0; // задержка между спавнами внутри волны
+let waveBossSpawned = false;
+let bonesCount = 0;
+let pickups = [];
+const BOSS_GIANT_BONE_DROP_CHANCE = 0.1;
+const BOSS_BUFF_FRAMES = 60 * 30; // 30 сек
 
 function updateWaveSpawn() {
   // Показываем "ВОЛНА N" — не спавним
@@ -788,18 +828,24 @@ function updateWaveSpawn() {
   // Апгрейд показывается — не спавним до выбора
   if (showUpgradeScreen) return;
 
-  // Волна завершена: живых врагов 0, спавн заблокирован. Лечение + задержка 1 сек до бонусов.
+  // Волна завершена: все враги убиты. Сначала спавним босса, после смерти босса — бонусы.
   if (waveEnemiesSpawned >= waveEnemiesTarget && enemies.length === 0) {
-    if (waveBonusDelayFrames < 0) {
-      const healAmount = player.hp * 0.5;
-      player.hp = Math.min(player.hp + healAmount, player.maxHp);
-      waveBonusDelayFrames = BONUS_APPEAR_DELAY;
-    }
-    waveBonusDelayFrames--;
-    if (waveBonusDelayFrames <= 0) {
-      showUpgradeScreen = true;
-      upgradeScreenOpened = false;
-      waveBonusDelayFrames = -1;
+    if (!waveBossSpawned) {
+      spawnBoss();
+      waveBossSpawned = true;
+    } else {
+      if (waveBonusDelayFrames < 0) {
+        const healAmount = player.hp * 0.5;
+        player.hp = Math.min(player.hp + healAmount, player.maxHp);
+        waveBonusDelayFrames = BONUS_APPEAR_DELAY;
+      }
+      waveBonusDelayFrames--;
+      if (waveBonusDelayFrames <= 0) {
+        showUpgradeScreen = true;
+        upgradeScreenOpened = false;
+        waveBonusDelayFrames = -1;
+        waveBossSpawned = false;
+      }
     }
     return;
   }
@@ -818,6 +864,42 @@ function updateWaveSpawn() {
     spawnEnemyFromSide(fromLeft ? "right" : "left", waveCount);
     waveEnemiesSpawned++;
   }
+}
+
+function spawnBoss() {
+  const side = Math.random() < 0.5 ? "left" : "right";
+  const portals = PORTAL_POSITIONS.filter((p) => p.side === side);
+  if (portals.length === 0) return;
+  const portal = portals[Math.floor(Math.random() * portals.length)];
+  const t = ENEMY_TYPES.boss;
+  const fromLeft = side === "left";
+  const x = fromLeft ? portal.x + 8 : portal.x + PORTAL_W - 8 - t.w;
+  const dir = fromLeft ? 1 : -1;
+  const y = portal.y + PORTAL_H - t.h - 4;
+  const yClamp = Math.max(32, Math.min(ARENA_HEIGHT - t.h - 32, y));
+  enemies.push({
+    type: "boss",
+    x,
+    y: yClamp,
+    goalX: player.x,
+    goalY: player.y,
+    w: t.w,
+    h: t.h,
+    vx: 0,
+    vy: 0,
+    hp: t.hp,
+    maxHp: t.hp,
+    damageMultiplier: 1,
+    speed: t.speed,
+    color: t.color,
+    grounded: false,
+    fly: false,
+    jumpVel: 0,
+    jumpCooldown: 0,
+    dir,
+    stunFrames: 0,
+    landingFrames: 0,
+  });
 }
 
 function updateEnemy(e, dt) {
@@ -909,7 +991,7 @@ function updateEnemy(e, dt) {
         ((atLeftEdge && e.dir < 0) || (atRightEdge && e.dir > 0))
       )
         e.dir *= -1;
-    } else if (e.type === "big") {
+    } else if (e.type === "big" || e.type === "boss") {
       const targetVx = e.dir * e.speed;
       e.vx += (targetVx - e.vx) * 0.12;
       if (
@@ -991,6 +1073,7 @@ function applyUpgrade(id) {
   showUpgradeScreen = false;
   document.getElementById("upgradeScreen").classList.remove("visible");
   waveCount++;
+  hudKillWavePulseFrames = HUD_COUNTER_PULSE_FRAMES;
   waveEnemiesSpawned = 0;
   waveEnemiesTarget = Math.max(
     WAVE_1_ENEMY_COUNT,
@@ -1123,6 +1206,7 @@ function loop(now) {
     player.y += player.vy;
     player.x = Math.max(0, Math.min(ARENA_WIDTH - player.w, player.x));
     player.y = Math.max(0, Math.min(ARENA_HEIGHT - player.h, player.y));
+
     const fallVy = player.vy;
 
     const wasGrounded = player.grounded;
@@ -1148,7 +1232,8 @@ function loop(now) {
             ey = e.y + e.h / 2;
           const d = Math.hypot(ex - cx, ey - cy);
           if (d < GROUND_POUND_RADIUS) {
-            damageEnemy(e, GROUND_POUND_DAMAGE);
+            const bossMult = player.bossBuffFrames > 0 ? 1.1 : 1;
+            damageEnemy(e, GROUND_POUND_DAMAGE * bossMult);
             if (e.hp <= 0) spawnGore(e.x + e.w / 2, e.y + e.h / 2, e.w);
           }
         });
@@ -1183,6 +1268,10 @@ function loop(now) {
   if (player.meleeFrames > 0) {
     player.meleeFrames = Math.max(0, player.meleeFrames - MELEE_ANIM_SPEED);
     if (player.meleeFrames === 0) {
+      if (player.comboResetAfterSwing) {
+        player.comboStacks = 0;
+        player.comboResetAfterSwing = false;
+      }
       if (meleeTrail.length > 0) {
         attackTrail = meleeTrail.map((p) => ({ x: p.x, y: p.y, alpha: 0.85 }));
         meleeTrail = [];
@@ -1196,7 +1285,7 @@ function loop(now) {
       const comboMult = 1 + (player.comboStacks || 0) * COMBO_RADIUS_PER_STACK;
       const hitLen = Math.min(
         MELEE_MAX_LENGTH,
-        Math.round(70 * MELEE_LENGTH_SCALE * comboMult)
+        Math.round(35 * MELEE_LENGTH_SCALE * comboMult)
       );
       const cx = player.x + player.w / 2;
       const cy = player.y + player.h / 2;
@@ -1220,7 +1309,9 @@ function loop(now) {
         const projX = cx + ax * t;
         const projY = cy + ay * t;
         const dist = Math.hypot(ex - projX, ey - projY);
-        if (dist >= MELEE_HIT_MARGIN) return;
+        const margin =
+          e.type === "boss" ? MELEE_HIT_MARGIN_BOSS : MELEE_HIT_MARGIN;
+        if (dist >= margin) return;
         damageEnemy(e, meleeDamage(), { x: ax, y: ay });
         hitSomething = true;
       });
@@ -1268,6 +1359,22 @@ function loop(now) {
       const heal = player.maxHp * 0.002 * player.upgrades.regen;
       player.hp = Math.min(player.hp + heal, player.maxHp);
       player.regenAccumulatorMs -= 1000;
+    }
+  }
+  if (player.bossBuffFrames > 0) player.bossBuffFrames--;
+
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const p = pickups[i];
+    const px = p.x + p.w / 2;
+    const py = p.y + p.h / 2;
+    const overlap =
+      player.x + player.w > p.x &&
+      player.x < p.x + p.w &&
+      player.y + player.h > p.y &&
+      player.y < p.y + p.h;
+    if (overlap && p.type === "giant_bone") {
+      player.bossBuffFrames = BOSS_BUFF_FRAMES;
+      pickups.splice(i, 1);
     }
   }
 
@@ -1339,13 +1446,6 @@ function loop(now) {
     document.getElementById("gameOver").classList.add("visible");
     document.getElementById("finalKills").textContent = kills;
   }
-
-  document.getElementById("kills").textContent = kills;
-  const speedPct = (runSpeed() / RUN_MAX) * 100;
-  document.getElementById("speed").textContent = speedPct.toFixed(0) + "%";
-  const dashCdSec = (player.dashCooldown / 60).toFixed(1);
-  document.getElementById("overdriveText").textContent =
-    player.dashCooldown > 0 ? `Даш КД ${dashCdSec}с` : "Даш готов";
 
   draw();
   requestAnimationFrame(loop);
@@ -1447,6 +1547,50 @@ function draw() {
       ENEMY_HP_BAR_W * Math.max(0, e.hp / e.maxHp),
       ENEMY_HP_BAR_H
     );
+    if (ENEMY_TYPES[e.type] && ENEMY_TYPES[e.type].fly) {
+      const ex = e.x + e.w / 2;
+      const ey = e.y - 12;
+      const dx = player.x + player.w / 2 - ex;
+      const dy = player.y + player.h / 2 - ey;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const ax = ex + ux * 14;
+      const ay = ey + uy * 14;
+      const wing = 6;
+      const lx = ax - ux * 8 - uy * wing;
+      const ly = ay - uy * 8 + ux * wing;
+      const rx = ax - ux * 8 + uy * wing;
+      const ry = ay - uy * 8 - ux * wing;
+      ctx.fillStyle = "rgba(255, 180, 80, 0.9)";
+      ctx.beginPath();
+      ctx.moveTo(ex + ux * 4, ey + uy * 4);
+      ctx.lineTo(lx, ly);
+      ctx.lineTo(ax, ay);
+      ctx.lineTo(rx, ry);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 220, 120, 0.8)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  });
+
+  pickups.forEach((p) => {
+    if (p.x + p.w < cameraX - 50 || p.x > cameraX + W + 50) return;
+    if (p.y + p.h < cameraY - 50 || p.y > cameraY + H + 50) return;
+    if (p.type === "giant_bone") {
+      ctx.fillStyle = "#c4a574";
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.strokeStyle = "#8a7048";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(p.x, p.y, p.w, p.h);
+      ctx.font = "10px Courier New";
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Кость", p.x + p.w / 2, p.y + p.h / 2);
+    }
   });
 
   dashTrail.forEach((t, i) => {
@@ -1484,17 +1628,10 @@ function draw() {
     ctx.stroke();
   }
 
-  const barW = 40;
-  ctx.fillStyle = "#330000";
-  ctx.fillRect(player.x, player.y - 10, barW, 5);
-  ctx.fillStyle =
-    player.hp > 50 ? "#22cc22" : player.hp > 25 ? "#ccaa22" : "#cc2222";
-  ctx.fillRect(player.x, player.y - 10, barW * (player.hp / player.maxHp), 5);
-
   const comboMultStick = 1 + (player.comboStacks || 0) * COMBO_RADIUS_PER_STACK;
   const stickLen = Math.min(
     MELEE_MAX_LENGTH,
-    Math.round(70 * MELEE_LENGTH_SCALE * comboMultStick)
+    Math.round(35 * MELEE_LENGTH_SCALE * comboMultStick)
   );
   const gripX = player.x + player.w / 2;
   const gripY = player.y + player.h / 2;
@@ -1510,6 +1647,23 @@ function draw() {
     const tipX = gripX + facing * stickLen * Math.cos(angle);
     const tipY = gripY + stickLen * Math.sin(angle);
 
+    const isCombo = (player.comboStacks || 0) > 0;
+    const hitboxAlpha = 0.2 + (isCombo ? 0.15 : 0);
+    const hitboxColor = isCombo ? "rgba(255, 200, 80," : "rgba(255, 120, 60,";
+    const coneW = MELEE_HIT_MARGIN * 0.8;
+    const conePerpX = -Math.sin(angle) * coneW;
+    const conePerpY = facing * Math.cos(angle) * coneW;
+    ctx.beginPath();
+    ctx.moveTo(gripX, gripY);
+    ctx.lineTo(tipX + conePerpX, tipY + conePerpY);
+    ctx.lineTo(tipX - conePerpX, tipY - conePerpY);
+    ctx.closePath();
+    ctx.fillStyle = hitboxColor + hitboxAlpha + ")";
+    ctx.fill();
+    ctx.strokeStyle = hitboxColor + (hitboxAlpha + 0.1) + ")";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
     if (meleeTrail.length < 16) meleeTrail.push({ x: tipX, y: tipY });
     meleeTrail.forEach((p, i) => {
       const a = (1 - i / meleeTrail.length) * 0.35;
@@ -1522,18 +1676,20 @@ function draw() {
 
     const alpha = 0.5 + progress * 0.5;
     const bladeHalfW = 6;
-    const perpX = -Math.sin(angle) * bladeHalfW;
-    const perpY = facing * Math.cos(angle) * bladeHalfW;
+    const bladePerpX = -Math.sin(angle) * bladeHalfW;
+    const bladePerpY = facing * Math.cos(angle) * bladeHalfW;
     ctx.beginPath();
-    ctx.moveTo(gripX - perpX, gripY - perpY);
-    ctx.lineTo(gripX + perpX, gripY + perpY);
-    ctx.lineTo(tipX + perpX, tipY + perpY);
-    ctx.lineTo(tipX - perpX, tipY - perpY);
+    ctx.moveTo(gripX - bladePerpX, gripY - bladePerpY);
+    ctx.lineTo(gripX + bladePerpX, gripY + bladePerpY);
+    ctx.lineTo(tipX + bladePerpX, tipY + bladePerpY);
+    ctx.lineTo(tipX - bladePerpX, tipY - bladePerpY);
     ctx.closePath();
-    ctx.fillStyle =
-      player.meleeVariant === MELEE_TOP_DOWN
-        ? `rgba(255, 180, 90, ${alpha * 0.85})`
-        : `rgba(255, 120, 60, ${alpha * 0.85})`;
+    const bladeColor = isCombo
+      ? `rgba(255, 220, 120, ${alpha * 0.9})`
+      : player.meleeVariant === MELEE_TOP_DOWN
+      ? `rgba(255, 180, 90, ${alpha * 0.85})`
+      : `rgba(255, 120, 60, ${alpha * 0.85})`;
+    ctx.fillStyle = bladeColor;
     ctx.fill();
     ctx.strokeStyle = `rgba(255, 200, 120, ${alpha})`;
     ctx.lineWidth = 2;
@@ -1581,6 +1737,132 @@ function draw() {
 
   ctx.restore();
 
+  if (hudCtx) {
+    hudCtx.clearRect(0, 0, W, H);
+
+    if (hudKillWavePulseFrames > 0) {
+      hudKillWavePulseFrames--;
+      const elapsed = HUD_COUNTER_PULSE_FRAMES - hudKillWavePulseFrames;
+      if (elapsed <= HUD_COUNTER_PULSE_GROW_FRAMES) {
+        hudCounterScale = 1 + 0.2 * (elapsed / HUD_COUNTER_PULSE_GROW_FRAMES);
+      } else {
+        const t =
+          (elapsed - HUD_COUNTER_PULSE_GROW_FRAMES) /
+          HUD_COUNTER_PULSE_GROW_FRAMES;
+        const easeOut = 1 - (1 - t) * (1 - t);
+        hudCounterScale = 1.2 - 0.2 * easeOut;
+      }
+    } else {
+      hudCounterScale = 1;
+    }
+
+    hudCtx.textAlign = "center";
+    hudCtx.textBaseline = "top";
+    hudCtx.font = "14px Courier New";
+    hudCtx.shadowColor = "rgba(0,0,0,0.9)";
+    hudCtx.shadowBlur = 4;
+    hudCtx.shadowOffsetX = 1;
+    hudCtx.shadowOffsetY = 1;
+    hudCtx.fillStyle = "#fff";
+    const pivotX = W / 2;
+    const pivotY = 20;
+    hudCtx.save();
+    hudCtx.translate(pivotX, pivotY);
+    hudCtx.scale(hudCounterScale, hudCounterScale);
+    hudCtx.translate(-pivotX, -pivotY);
+    hudCtx.fillText("Убийства: " + kills, W / 2, 12);
+    hudCtx.fillText("Волна: " + waveCount, W / 2, 28);
+    hudCtx.restore();
+    hudCtx.shadowBlur = 0;
+    hudCtx.shadowOffsetX = 0;
+    hudCtx.shadowOffsetY = 0;
+
+    const hx = 16,
+      hy = 12,
+      hw = 220,
+      hh = 16;
+    hudCtx.fillStyle = "rgba(0,0,0,0.6)";
+    hudCtx.fillRect(hx - 2, hy - 2, hw + 4, hh + 4);
+    hudCtx.strokeStyle = "#cc2222";
+    hudCtx.lineWidth = 2;
+    hudCtx.strokeRect(hx - 2, hy - 2, hw + 4, hh + 4);
+    hudCtx.fillStyle = "#440000";
+    hudCtx.fillRect(hx, hy, hw, hh);
+    hudCtx.fillStyle = "#cc2222";
+    hudCtx.fillRect(hx, hy, hw * Math.max(0, player.hp / player.maxHp), hh);
+    if (player.upgrades.regen > 0 && player.regenAccumulatorMs != null) {
+      const regenProgress = Math.min(
+        1,
+        (player.regenAccumulatorMs || 0) / 1000
+      );
+      const regenBarY = hy + hh + 2;
+      const regenBarH = 3;
+      hudCtx.fillStyle = "rgba(80, 40, 20, 0.8)";
+      hudCtx.fillRect(hx, regenBarY, hw, regenBarH);
+      hudCtx.fillStyle = "rgba(255, 180, 80, 0.5 + 0.4 * regenProgress)";
+      hudCtx.fillRect(hx, regenBarY, hw * regenProgress, regenBarH);
+    }
+    hudCtx.font = "bold 11px Courier New";
+    hudCtx.fillStyle = "#ffdd88";
+    hudCtx.textAlign = "left";
+    hudCtx.textBaseline = "top";
+    hudCtx.fillText("HP", hx, hy - 12);
+
+    const ay = hy + hh + (player.upgrades.regen > 0 ? 14 : 8),
+      aw = hw,
+      ah = 8;
+    hudCtx.fillStyle = "rgba(0,0,0,0.6)";
+    hudCtx.fillRect(hx - 2, ay - 2, aw + 4, ah + 4);
+    hudCtx.strokeStyle = "#888";
+    hudCtx.lineWidth = 1;
+    hudCtx.strokeRect(hx - 2, ay - 2, aw + 4, ah + 4);
+    const attackReady = player.meleeCooldown <= 0;
+    const comboActive = player.comboFrames < COMBO_WINDOW_FRAMES;
+    const attackFill = attackReady
+      ? 1
+      : 1 - player.meleeCooldown / MELEE_COOLDOWN_FRAMES;
+    hudCtx.fillStyle = comboActive
+      ? "rgba(255, 180, 60, 0.9)"
+      : "rgba(80, 80, 80, 0.8)";
+    hudCtx.fillRect(hx, ay, aw, ah);
+    hudCtx.fillStyle = comboActive
+      ? "rgba(255, 220, 100, 0.95)"
+      : "rgba(200, 120, 60, 0.9)";
+    hudCtx.fillRect(hx, ay, aw * attackFill, ah);
+    if (comboActive) {
+      hudCtx.strokeStyle = "rgba(255, 200, 80, 0.8)";
+      hudCtx.lineWidth = 2;
+      hudCtx.strokeRect(hx, ay - 2, aw + 4, ah + 4);
+    }
+    hudCtx.font = "10px Courier New";
+    hudCtx.fillStyle = "#ccc";
+    hudCtx.fillText(attackReady ? "Атака готова" : "КД атаки", hx, ay + ah + 2);
+
+    const bonesY = ay + ah + 18;
+    hudCtx.fillStyle = "#e8dcc8";
+    hudCtx.font = "11px Courier New";
+    hudCtx.fillText("Кости: " + bonesCount, hx, bonesY);
+  }
+
+  const buffsEl = document.getElementById("buffsPanel");
+  if (buffsEl) {
+    const lines = [];
+    lines.push("×2 атака");
+    if ((player.upgrades.regen || 0) > 0)
+      lines.push("Реген " + (player.upgrades.regen * 0.2).toFixed(1) + "%");
+    if (player.comboFrames < COMBO_WINDOW_FRAMES)
+      lines.push("Радиус + (комбо)");
+    if ((player.upgrades.speed || 0) > 0)
+      lines.push("Скорость +" + player.upgrades.speed * 10 + "%");
+    if ((player.upgrades.damage || 0) > 0)
+      lines.push("Урон +" + player.upgrades.damage * 10 + "%");
+    if ((player.upgrades.maxHp || 0) > 0)
+      lines.push("Макс. HP +" + player.upgrades.maxHp * 10 + "%");
+    if (player.bossBuffFrames > 0) lines.push("Сила босса +10%");
+    buffsEl.innerHTML = lines.length ? lines.join("<br>") : "";
+    buffsEl.style.display = lines.length ? "block" : "none";
+  }
+
   if (waveAnnounceFrames > 0) {
     const progress = 1 - waveAnnounceFrames / WAVE_ANNOUNCE_FRAMES;
     const appear = progress < 0.12 ? progress / 0.12 : 1;
@@ -1626,6 +1908,12 @@ function init() {
   player.regenAccumulatorMs = 0;
   player.attackFacing = player.facing;
   kills = 0;
+  hudKillWavePulseFrames = 0;
+  hudCounterScale = 1;
+  waveBossSpawned = false;
+  bonesCount = 0;
+  pickups = [];
+  player.bossBuffFrames = 0;
   attackTrail = [];
   meleeTrail = [];
   enemies = [];
